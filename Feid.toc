@@ -1,0 +1,8 @@
+## Interface: 11200
+## Title: Feid
+## Notes: Fades specific frames in and out of combat.
+## Author: Junie
+## Version: 2.2
+## SavedVariables: FeidDB
+
+Feid.lua
