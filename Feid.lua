@@ -665,12 +665,15 @@ fader:SetScript("OnUpdate", function()
         end
 
         -- Determine target alpha for this specific frame
-        local isTriggered = combat or casting or IsMouseOverFrame(info.frame)
+        local mouseOver = IsMouseOverFrame(info.frame)
+        local isTriggered = combat or casting or mouseOver
         if invert then
             isTriggered = not isTriggered
         end
 
-        if isTriggered then
+        if mouseOver then
+            info.targetAlpha = 1.0
+        elseif isTriggered then
             info.targetAlpha = maxAlpha
         else
             info.targetAlpha = minAlpha
