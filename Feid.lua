@@ -6,7 +6,7 @@ local DEFAULT_SETTINGS = {
     fadeInDuration = 0.5,
     fadeOutDuration = 0.5,
     enabled = true,
-    disableInDungeons = false,
+    disableInParty = false,
     disableInRaids = false,
     disableInBGs = false,
 }
@@ -41,9 +41,6 @@ end
 
 local function IsDisabledInZone()
     if not FeidDB then return false end
-    
-    -- In WoW 1.12.1, GetInstanceInfo() and IsInInstance() do not exist.
-    -- We must rely on alternative methods for detection.
 
     -- 1. Check for Battlegrounds
     if FeidDB.disableInBGs then
@@ -54,34 +51,13 @@ local function IsDisabledInZone()
         end
     end
 
-    -- 2. Check for Raids
     if FeidDB.disableInRaids and GetNumRaidMembers() > 0 then
-        -- In 1.12, being in a raid group is a strong indicator of being in a raid instance,
-        -- though not 100% accurate (could be out in the world).
         return true
     end
 
-    -- 3. Check for Dungeons
-    if FeidDB.disableInDungeons then
-        -- Detecting a 5-man dungeon without GetInstanceInfo is tricky.
-        -- We'll check if we're in a party but NOT a raid.
-        -- To avoid disabling it every time the player is just questing in a party,
-        -- we can check if the "Reset all instances" option is available, 
-        -- but that's only for the leader.
-        
-        -- A more common way is to check the Minimap text or use GetZoneText()
-        -- but that requires a database.
-        
-        -- For now, let's keep it simple: if in a party and they checked "No Dungeons",
-        -- we'll assume they might want it disabled. 
-        -- Optimization: only if we are actually in a party.
+    if FeidDB.disableInParty then
         if GetNumPartyMembers() > 0 and GetNumRaidMembers() == 0 then
-             -- This is still broad. Let's see if we can do better.
-             -- Many 1.12 addons just use the fact that you can't see your map 
-             -- position in many instances, but that's not universal.
-             
-             -- Let's just return true if grouped as a fallback for "No Dungeons".
-             -- return true
+             return true
         end
     end
     
@@ -99,15 +75,25 @@ local function ResolveFrames()
     if not FeidDB or not FeidDB.frames then return end
     
     local added = {} -- To avoid duplicates if patterns overlap
-    for pattern, _ in pairs(FeidDB.frames) do
+    for pattern, config in pairs(FeidDB.frames) do
         local frames = GetFramesByPattern(pattern)
         for _, frame in ipairs(frames) do
             if not added[frame] then
                 local current = oldFrames[frame] or (FeidDB and FeidDB.minAlpha) or 0.5
+                
+                -- Store config with the resolved frame
+                local frameConfig = (type(config) == "table") and config or { useDefault = true }
+                
+                -- Ensure old boolean entries are upgraded to tables
+                if type(FeidDB.frames[pattern]) ~= "table" then
+                    FeidDB.frames[pattern] = frameConfig
+                end
+
                 table.insert(resolvedFrames, {
                     frame = frame,
                     currentAlpha = current,
-                    targetAlpha = current
+                    targetAlpha = current,
+                    config = frameConfig
                 })
                 added[frame] = true
             end
@@ -202,6 +188,21 @@ local function CreateConfigWindow()
     title:SetPoint("TOP", f, "TOP", 0, -15)
     title:SetText("Feid Configuration")
 
+    -- Vertical Separator 1 (between Sliders and Checkboxes)
+    local vline1 = f:CreateTexture(nil, "ARTWORK")
+    vline1:SetTexture(0.5, 0.5, 0.5, 0.5)
+    vline1:SetWidth(1)
+    vline1:SetPoint("TOPLEFT", f, "TOPLEFT", 160, -40)
+    vline1:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 160, 40)
+
+    local function UpdateGlobalFading()
+        for _, info in ipairs(resolvedFrames) do
+            if not info.config or info.config.useDefault then
+                -- Target alpha will be updated in next OnUpdate
+            end
+        end
+    end
+
     -- Column 1: Sliders
     -- Min Alpha Slider
     local minSlider = CreateFrame("Slider", "FeidMinSlider", f, "OptionsSliderTemplate")
@@ -211,6 +212,7 @@ local function CreateConfigWindow()
     minSlider:SetValueStep(0.05)
     minSlider:SetScript("OnValueChanged", function()
         FeidDB.minAlpha = this:GetValue()
+        UpdateGlobalFading()
     end)
 
     -- Max Alpha Slider
@@ -221,6 +223,7 @@ local function CreateConfigWindow()
     maxSlider:SetValueStep(0.05)
     maxSlider:SetScript("OnValueChanged", function()
         FeidDB.maxAlpha = this:GetValue()
+        UpdateGlobalFading()
     end)
 
     -- Fade In Slider
@@ -243,13 +246,6 @@ local function CreateConfigWindow()
         FeidDB.fadeOutDuration = this:GetValue()
     end)
 
-    -- Vertical Separator 1 (between Sliders and Checkboxes)
-    local vline1 = f:CreateTexture(nil, "ARTWORK")
-    vline1:SetTexture(0.5, 0.5, 0.5, 0.5)
-    vline1:SetWidth(1)
-    vline1:SetPoint("TOPLEFT", f, "TOPLEFT", 160, -40)
-    vline1:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 160, 40)
-
     -- Column 2: Checkboxes
     -- Enable Checkbox
     local enableCheck = CreateFrame("CheckButton", "FeidEnableCheck", f, "UICheckButtonTemplate")
@@ -261,18 +257,18 @@ local function CreateConfigWindow()
     end)
 
     -- Disable in Zone Checkboxes
-    local dungeonCheck = CreateFrame("CheckButton", "FeidDungeonCheck", f, "UICheckButtonTemplate")
-    dungeonCheck:SetPoint("TOPLEFT", enableCheck, "BOTTOMLEFT", 0, 5)
-    dungeonCheck:SetScale(0.8)
-    getglobal(dungeonCheck:GetName() .. "Text"):SetText("No Dungeons")
-    dungeonCheck:SetScript("OnClick", function()
-        FeidDB.disableInDungeons = this:GetChecked() and true or false
+    local partyCheck = CreateFrame("CheckButton", "FeidPartyCheck", f, "UICheckButtonTemplate")
+    partyCheck:SetPoint("TOPLEFT", enableCheck, "BOTTOMLEFT", 0, 5)
+    partyCheck:SetScale(0.8)
+    getglobal(partyCheck:GetName() .. "Text"):SetText("Disable in party")
+    partyCheck:SetScript("OnClick", function()
+        FeidDB.disableInParty = this:GetChecked() and true or false
     end)
 
     local raidCheck = CreateFrame("CheckButton", "FeidRaidCheck", f, "UICheckButtonTemplate")
-    raidCheck:SetPoint("TOPLEFT", dungeonCheck, "BOTTOMLEFT", 0, 5)
+    raidCheck:SetPoint("TOPLEFT", partyCheck, "BOTTOMLEFT", 0, 5)
     raidCheck:SetScale(0.8)
-    getglobal(raidCheck:GetName() .. "Text"):SetText("No Raids")
+    getglobal(raidCheck:GetName() .. "Text"):SetText("Disable in raids")
     raidCheck:SetScript("OnClick", function()
         FeidDB.disableInRaids = this:GetChecked() and true or false
     end)
@@ -280,7 +276,7 @@ local function CreateConfigWindow()
     local bgCheck = CreateFrame("CheckButton", "FeidBGCheck", f, "UICheckButtonTemplate")
     bgCheck:SetPoint("TOPLEFT", raidCheck, "BOTTOMLEFT", 0, 5)
     bgCheck:SetScale(0.8)
-    getglobal(bgCheck:GetName() .. "Text"):SetText("No BGs")
+    getglobal(bgCheck:GetName() .. "Text"):SetText("Disable in BGs")
     bgCheck:SetScript("OnClick", function()
         FeidDB.disableInBGs = this:GetChecked() and true or false
     end)
@@ -292,6 +288,146 @@ local function CreateConfigWindow()
     vline2:SetPoint("TOPLEFT", f, "TOPLEFT", 300, -40)
     vline2:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 300, 40)
 
+    -- Popup for Individual Frame Configuration
+    local function CreateFrameConfigPopup()
+        local p = CreateFrame("Frame", "FeidFrameConfigPopup", UIParent)
+        p:SetWidth(250)
+        p:SetHeight(380)
+        p:SetPoint("CENTER", UIParent, "CENTER")
+        p:SetBackdrop({
+            bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+            edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+            tile = true, tileSize = 32, edgeSize = 32,
+            insets = { left = 8, right = 8, top = 8, bottom = 8 }
+        })
+        p:EnableMouse(true)
+        p:SetMovable(true)
+        p:RegisterForDrag("LeftButton")
+        p:SetScript("OnDragStart", function() this:StartMoving() end)
+        p:SetScript("OnDragStop", function() this:StopMovingOrSizing() end)
+        p:SetFrameStrata("DIALOG")
+        p:Hide()
+
+        local ptitle = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        ptitle:SetPoint("TOP", p, "TOP", 0, -15)
+        ptitle:SetText("Frame Settings")
+
+        -- Frame Name EditBox
+        local pNameEdit = CreateFrame("EditBox", "FeidPopupNameEdit", p, "InputBoxTemplate")
+        pNameEdit:SetWidth(180)
+        pNameEdit:SetHeight(20)
+        pNameEdit:SetPoint("TOP", p, "TOP", 0, -50)
+        pNameEdit:SetAutoFocus(false)
+        local pNameLabel = p:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        pNameLabel:SetPoint("BOTTOMLEFT", pNameEdit, "TOPLEFT", 0, 5)
+        pNameLabel:SetText("Frame name")
+
+        -- Use Default Checkbox
+        local pDefaultCheck = CreateFrame("CheckButton", "FeidPopupDefaultCheck", p, "UICheckButtonTemplate")
+        pDefaultCheck:SetPoint("TOPLEFT", pNameEdit, "BOTTOMLEFT", -5, -15)
+        getglobal(pDefaultCheck:GetName() .. "Text"):SetText("Use Default")
+
+        -- Individual Sliders
+        local function CreatePopupSlider(name, label, min, max, step, yOffset)
+            local s = CreateFrame("Slider", "FeidPopup" .. name .. "Slider", p, "OptionsSliderTemplate")
+            s:SetPoint("TOPLEFT", pDefaultCheck, "BOTTOMLEFT", 5, yOffset)
+            s:SetWidth(180)
+            getglobal(s:GetName() .. "Text"):SetText(label)
+            s:SetMinMaxValues(min, max)
+            s:SetValueStep(step)
+            return s
+        end
+
+        local pMinSlider = CreatePopupSlider("Min", "Min Opacity", 0, 1, 0.05, -30)
+        local pMaxSlider = CreatePopupSlider("Max", "Max Opacity", 0, 1, 0.05, -70)
+        local pInSlider = CreatePopupSlider("In", "Fade In Time", 0, 2, 0.1, -110)
+        local pOutSlider = CreatePopupSlider("Out", "Fade Out Time", 0, 2, 0.1, -150)
+
+        -- Invert Checkbox
+        local pInvertCheck = CreateFrame("CheckButton", "FeidPopupInvertCheck", p, "UICheckButtonTemplate")
+        pInvertCheck:SetPoint("TOPLEFT", pOutSlider, "BOTTOMLEFT", -5, -15)
+        getglobal(pInvertCheck:GetName() .. "Text"):SetText("Invert")
+
+        local sliders = {pMinSlider, pMaxSlider, pInSlider, pOutSlider, pInvertCheck}
+        local function UpdatePopupState()
+            local enabled = not pDefaultCheck:GetChecked()
+            for _, s in ipairs(sliders) do
+                if enabled then
+                    if s.Enable then s:Enable() end
+                    local txt = getglobal(s:GetName() .. "Text")
+                    if txt then txt:SetTextColor(1, 0.82, 0) end
+                    if s.SetAlpha then s:SetAlpha(1.0) end
+                else
+                    if s.Disable then s:Disable() end
+                    local txt = getglobal(s:GetName() .. "Text")
+                    if txt then txt:SetTextColor(0.5, 0.5, 0.5) end
+                    if s.SetAlpha then s:SetAlpha(0.5) end
+                end
+            end
+        end
+        pDefaultCheck:SetScript("OnClick", UpdatePopupState)
+
+        -- Apply/Cancel Buttons
+        local apply = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
+        apply:SetWidth(80)
+        apply:SetHeight(22)
+        apply:SetPoint("BOTTOMLEFT", p, "BOTTOMLEFT", 25, 20)
+        apply:SetText("Apply")
+
+        local cancel = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
+        cancel:SetWidth(80)
+        cancel:SetHeight(22)
+        cancel:SetPoint("BOTTOMRIGHT", p, "BOTTOMRIGHT", -25, 20)
+        cancel:SetText("Cancel")
+        cancel:SetScript("OnClick", function() p:Hide() end)
+
+        apply:SetScript("OnClick", function()
+            local oldName = p.oldName
+            local newName = pNameEdit:GetText()
+            if not newName or newName == "" then return end
+
+            local cfg = {
+                useDefault = pDefaultCheck:GetChecked() and true or false,
+                minAlpha = pMinSlider:GetValue(),
+                maxAlpha = pMaxSlider:GetValue(),
+                fadeInDuration = pInSlider:GetValue(),
+                fadeOutDuration = pOutSlider:GetValue(),
+                invert = pInvertCheck:GetChecked() and true or false
+            }
+
+            if oldName ~= newName then
+                FeidDB.frames[oldName] = nil
+            end
+            FeidDB.frames[newName] = cfg
+            
+            ResolveFrames()
+            Feid_UpdateScrollChild()
+            p:Hide()
+        end)
+
+        p.Open = function(self, name)
+            local cfg = FeidDB.frames[name]
+            if type(cfg) ~= "table" then
+                cfg = { useDefault = true, minAlpha = FeidDB.minAlpha, maxAlpha = FeidDB.maxAlpha, fadeInDuration = FeidDB.fadeInDuration, fadeOutDuration = FeidDB.fadeOutDuration, invert = false }
+            end
+            self.oldName = name
+            pNameEdit:SetText(name)
+            pDefaultCheck:SetChecked(cfg.useDefault)
+            pMinSlider:SetValue(cfg.minAlpha or FeidDB.minAlpha)
+            pMaxSlider:SetValue(cfg.maxAlpha or FeidDB.maxAlpha)
+            pInSlider:SetValue(cfg.fadeInDuration or FeidDB.fadeInDuration)
+            pOutSlider:SetValue(cfg.fadeOutDuration or FeidDB.fadeOutDuration)
+            pInvertCheck:SetChecked(cfg.invert)
+
+            -- Trigger the visual update for disabled states
+            UpdatePopupState()
+            self:Show()
+        end
+
+        return p
+    end
+    local popup = CreateFrameConfigPopup()
+
     -- Column 3: Frame Management
     -- Frame Name Input
     local editBox = CreateFrame("EditBox", "FeidEditBox", f, "InputBoxTemplate")
@@ -299,6 +435,10 @@ local function CreateConfigWindow()
     editBox:SetHeight(20)
     editBox:SetPoint("TOPLEFT", f, "TOPLEFT", 320, -50)
     editBox:SetAutoFocus(false)
+
+    local editBoxLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    editBoxLabel:SetPoint("BOTTOMLEFT", editBox, "TOPLEFT", 0, 5)
+    editBoxLabel:SetText("Frame name")
 
     -- Add Button
     local addButton = CreateFrame("Button", "FeidAddButton", f, "UIPanelButtonTemplate")
@@ -309,7 +449,7 @@ local function CreateConfigWindow()
     addButton:SetScript("OnClick", function()
         local name = editBox:GetText()
         if name and name ~= "" then
-            FeidDB.frames[name] = true
+            FeidDB.frames[name] = { useDefault = true }
             editBox:SetText("")
             ResolveFrames()
             -- After resolving, ensure new frames start at current global state
@@ -358,7 +498,14 @@ local function CreateConfigWindow()
         if not child.rows then child.rows = {} end
         for _, row in ipairs(child.rows) do row:Hide() end
 
+        -- Get sorted keys for consistent display
+        local sortedNames = {}
         for name, _ in pairs(FeidDB.frames) do
+            table.insert(sortedNames, name)
+        end
+        table.sort(sortedNames)
+
+        for _, name in ipairs(sortedNames) do
             i = i + 1
             local row = child.rows[i]
             if not row then
@@ -377,6 +524,14 @@ local function CreateConfigWindow()
                 rem:SetText("Del")
                 row.rem = rem
 
+                local cog = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+                cog:SetWidth(40)
+                cog:SetHeight(18)
+                cog:SetPoint("RIGHT", rem, "LEFT", -5, 0)
+                cog:SetText("Edit")
+                
+                row.cog = cog
+
                 child.rows[i] = row
             end
 
@@ -388,13 +543,19 @@ local function CreateConfigWindow()
             row.rem:SetScript("OnClick", function()
                 -- Restore alpha to 100% before removing
                 local frames = GetFramesByPattern(currentName)
-                for _, frame in ipairs(frames) do
-                    frame:SetAlpha(1.0)
+                if frames then
+                    for _, frame in ipairs(frames) do
+                        frame:SetAlpha(1.0)
+                    end
                 end
                 
                 FeidDB.frames[currentName] = nil
                 ResolveFrames()
                 Feid_UpdateScrollChild()
+            end)
+
+            row.cog:SetScript("OnClick", function()
+                popup:Open(currentName)
             end)
             
             row:Show()
@@ -408,7 +569,7 @@ local function CreateConfigWindow()
         maxSlider:SetValue(FeidDB.maxAlpha)
         inSlider:SetValue(FeidDB.fadeInDuration)
         outSlider:SetValue(FeidDB.fadeOutDuration)
-        dungeonCheck:SetChecked(FeidDB.disableInDungeons)
+        partyCheck:SetChecked(FeidDB.disableInParty)
         raidCheck:SetChecked(FeidDB.disableInRaids)
         bgCheck:SetChecked(FeidDB.disableInBGs)
         Feid_UpdateScrollChild()
@@ -484,15 +645,35 @@ fader:SetScript("OnUpdate", function()
 
     local combat = UnitAffectingCombat("player")
     local casting = isCasting or isChanneling
-    local fadeInSpeed = FeidDB.fadeInDuration or 0.5
-    local fadeOutSpeed = FeidDB.fadeOutDuration or 0.5
 
     for _, info in ipairs(resolvedFrames) do
-        -- Determine target alpha for this specific frame
-        if combat or casting or IsMouseOverFrame(info.frame) then
-            info.targetAlpha = FeidDB.maxAlpha
+        local cfg = info.config
+        local minAlpha, maxAlpha, fadeInSpeed, fadeOutSpeed, invert
+        
+        if cfg and not cfg.useDefault then
+            minAlpha = cfg.minAlpha or FeidDB.minAlpha
+            maxAlpha = cfg.maxAlpha or FeidDB.maxAlpha
+            fadeInSpeed = cfg.fadeInDuration or FeidDB.fadeInDuration
+            fadeOutSpeed = cfg.fadeOutDuration or FeidDB.fadeOutDuration
+            invert = cfg.invert
         else
-            info.targetAlpha = FeidDB.minAlpha
+            minAlpha = FeidDB.minAlpha
+            maxAlpha = FeidDB.maxAlpha
+            fadeInSpeed = FeidDB.fadeInDuration
+            fadeOutSpeed = FeidDB.fadeOutDuration
+            invert = false
+        end
+
+        -- Determine target alpha for this specific frame
+        local isTriggered = combat or casting or IsMouseOverFrame(info.frame)
+        if invert then
+            isTriggered = not isTriggered
+        end
+
+        if isTriggered then
+            info.targetAlpha = maxAlpha
+        else
+            info.targetAlpha = minAlpha
         end
 
         -- Update current alpha
