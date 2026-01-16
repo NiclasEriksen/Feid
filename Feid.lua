@@ -17,17 +17,26 @@ local resolvedFrames = {}
 
 local fader = CreateFrame("Frame", "FeidMainFrame")
 
+local frameCache = nil
 local function GetFramesByPattern(pattern)
     local found = {}
     if string.find(pattern, "%*") then
+        if not frameCache then
+            frameCache = {}
+            for name, value in pairs(getfenv(0)) do
+                if type(value) == "table" and value.GetAlpha and value.SetAlpha then
+                    table.insert(frameCache, { name = name, frame = value })
+                end
+            end
+        end
+
         local luaPattern = string.gsub(pattern, "([%^%$%(%)%%%.%[%]%+%-%?])", "%%%1")
         luaPattern = string.gsub(luaPattern, "%*", ".*")
         luaPattern = "^" .. luaPattern .. "$"
-        for name, value in pairs(getfenv(0)) do
-            if type(value) == "table" and value.GetAlpha and value.SetAlpha then
-                if string.find(name, luaPattern) then
-                    table.insert(found, value)
-                end
+        
+        for _, info in ipairs(frameCache) do
+            if string.find(info.name, luaPattern) then
+                table.insert(found, info.frame)
             end
         end
     else
@@ -67,8 +76,10 @@ end
 local function ResolveFrames()
     -- Create a map of existing frames to preserve their current alpha state if they are still matched
     local oldFrames = {}
-    for _, info in ipairs(resolvedFrames) do
-        oldFrames[info.frame] = info.currentAlpha
+    if resolvedFrames then
+        for _, info in ipairs(resolvedFrames) do
+            oldFrames[info.frame] = info.currentAlpha
+        end
     end
 
     resolvedFrames = {}
@@ -79,21 +90,19 @@ local function ResolveFrames()
         local frames = GetFramesByPattern(pattern)
         for _, frame in ipairs(frames) do
             if not added[frame] then
-                local current = oldFrames[frame] or (FeidDB and FeidDB.minAlpha) or 0.5
-                
-                -- Store config with the resolved frame
-                local frameConfig = (type(config) == "table") and config or { useDefault = true }
-                
-                -- Ensure old boolean entries are upgraded to tables
-                if type(FeidDB.frames[pattern]) ~= "table" then
-                    FeidDB.frames[pattern] = frameConfig
+                -- Ensure config is upgraded to table if it's old boolean/nil
+                if type(config) ~= "table" then
+                    config = { useDefault = true }
+                    FeidDB.frames[pattern] = config
                 end
 
+                local current = oldFrames[frame] or (FeidDB and FeidDB.minAlpha) or 0.5
+                
                 table.insert(resolvedFrames, {
                     frame = frame,
                     currentAlpha = current,
                     targetAlpha = current,
-                    config = frameConfig
+                    config = config
                 })
                 added[frame] = true
             end
@@ -110,10 +119,10 @@ local function SetAllAlphas(alpha)
 end
 
 local function IsMouseOverFrame(frame)
+    if not frame:IsVisible() then return false end
     local focus = GetMouseFocus()
     if focus == frame then return true end
-    if MouseIsOver(frame) then return true end
-    return false
+    return MouseIsOver(frame)
 end
 
 -- Smooth Fading Logic
@@ -135,6 +144,7 @@ local isCasting = false
 local isChanneling = false
 
 fader:SetScript("OnEvent", function()
+    local event = event or arg1 -- For modern compat if needed, though event is global in 1.12.1
     if event == "VARIABLES_LOADED" then
         if not FeidDB then FeidDB = {} end
         for k, v in pairs(DEFAULT_SETTINGS) do
@@ -605,9 +615,13 @@ overlay:SetScript("OnClick", function()
     this.step = 1
 end)
 
+local throttleTimer = 0
+local STATE_THROTTLE = 0.1 -- Update state 10 times per second
+
 -- Move the identification update logic to the main fader to ensure it keeps running
 -- even when the overlay is hidden.
 fader:SetScript("OnUpdate", function()
+    local elapsed = arg1 or 0
     -- Identify Logic
     if isIdentifying and FeidIdentifyOverlay.step > 0 then
         if FeidIdentifyOverlay.step == 1 then
@@ -631,9 +645,8 @@ fader:SetScript("OnUpdate", function()
     end
 
     -- Smooth Fading Logic for individual frames
-    if not FeidDB.enabled or IsDisabledInZone() then
-        -- If disabled, ensure everything is at 100% (or maxAlpha?)
-        -- Usually disabled means "don't fade", so 100% is best.
+    if not FeidDB or not FeidDB.enabled or IsDisabledInZone() then
+        -- If disabled, ensure everything is at 100%
         for _, info in ipairs(resolvedFrames) do
             if info.currentAlpha ~= 1.0 then
                 info.currentAlpha = 1.0
@@ -643,46 +656,61 @@ fader:SetScript("OnUpdate", function()
         return
     end
 
-    local combat = UnitAffectingCombat("player")
-    local casting = isCasting or isChanneling
+    local combat, casting
+    throttleTimer = throttleTimer + elapsed
+    local updateStates = false
+    if throttleTimer >= STATE_THROTTLE then
+        updateStates = true
+        throttleTimer = 0
+        combat = UnitAffectingCombat("player")
+        casting = isCasting or isChanneling
+    end
 
     for _, info in ipairs(resolvedFrames) do
-        local cfg = info.config
-        local minAlpha, maxAlpha, fadeInSpeed, fadeOutSpeed, invert
-        
-        if cfg and not cfg.useDefault then
-            minAlpha = cfg.minAlpha or FeidDB.minAlpha
-            maxAlpha = cfg.maxAlpha or FeidDB.maxAlpha
-            fadeInSpeed = cfg.fadeInDuration or FeidDB.fadeInDuration
-            fadeOutSpeed = cfg.fadeOutDuration or FeidDB.fadeOutDuration
-            invert = cfg.invert
-        else
-            minAlpha = FeidDB.minAlpha
-            maxAlpha = FeidDB.maxAlpha
-            fadeInSpeed = FeidDB.fadeInDuration
-            fadeOutSpeed = FeidDB.fadeOutDuration
-            invert = false
-        end
+        if updateStates then
+            local cfg = info.config
+            local minAlpha, maxAlpha, invert
+            
+            if cfg and not cfg.useDefault then
+                minAlpha = cfg.minAlpha or FeidDB.minAlpha
+                maxAlpha = cfg.maxAlpha or FeidDB.maxAlpha
+                invert = cfg.invert
+            else
+                minAlpha = FeidDB.minAlpha
+                maxAlpha = FeidDB.maxAlpha
+                invert = false
+            end
 
-        -- Determine target alpha for this specific frame
-        local mouseOver = IsMouseOverFrame(info.frame)
-        local isTriggered = combat or casting or mouseOver
-        if invert then
-            isTriggered = not isTriggered
-        end
+            -- Determine target alpha for this specific frame
+            local mouseOver = IsMouseOverFrame(info.frame)
+            local isTriggered = combat or casting or mouseOver
+            if invert then
+                isTriggered = not isTriggered
+            end
 
-        if mouseOver then
-            info.targetAlpha = 1.0
-        elseif isTriggered then
-            info.targetAlpha = maxAlpha
-        else
-            info.targetAlpha = minAlpha
+            if mouseOver then
+                info.targetAlpha = 1.0
+            elseif isTriggered then
+                info.targetAlpha = maxAlpha
+            else
+                info.targetAlpha = minAlpha
+            end
         end
 
         -- Update current alpha
         if info.currentAlpha ~= info.targetAlpha then
+            local cfg = info.config
+            local fadeInSpeed, fadeOutSpeed
+            if cfg and not cfg.useDefault then
+                fadeInSpeed = cfg.fadeInDuration or FeidDB.fadeInDuration
+                fadeOutSpeed = cfg.fadeOutDuration or FeidDB.fadeOutDuration
+            else
+                fadeInSpeed = FeidDB.fadeInDuration
+                fadeOutSpeed = FeidDB.fadeOutDuration
+            end
+
             local speed = (info.currentAlpha < info.targetAlpha) and fadeInSpeed or fadeOutSpeed
-            local step = arg1 / (speed > 0 and speed or 0.01)
+            local step = elapsed / (speed > 0 and speed or 0.01)
             
             if info.currentAlpha < info.targetAlpha then
                 info.currentAlpha = math.min(info.targetAlpha, info.currentAlpha + step)
