@@ -1,3 +1,6 @@
+#Fade
+## A WoW 1.12.1 immersion UI addon
+
 Fade in/out any frame (actionbars, map, dps meter, unitframes etc.) from any addon when entering/exiting combat.
 Most of the code is generated with Junie + Claude Opus as I'm not comfortable with the WoW 1.12 API, but the principles are so simple that the code is really not that complex. It's simply animating the opacity of specified frames, triggered by events.
 
