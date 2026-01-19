@@ -1,4 +1,4 @@
-#Fade
+# Fade
 ## A WoW 1.12.1 immersion UI addon
 
 Fade in/out any frame (actionbars, map, dps meter, unitframes etc.) from any addon when entering/exiting combat.
