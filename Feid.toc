@@ -1,7 +1,7 @@
 ## Interface: 11200
 ## Title: Feid
-## Notes: Fades specific frames in and out of combat.
-## Author: Junie
+## Notes: Smoothly fades specific UI frames when in and out of combat.
+## Author: Hjelp+Junie
 ## Version: 2.2
 ## SavedVariables: FeidDB
 
