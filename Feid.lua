@@ -9,6 +9,7 @@ local DEFAULT_SETTINGS = {
     disableInParty = false,
     disableInRaids = false,
     disableInBGs = false,
+    fullHPManaOnly = false,
 }
 
 -- Internal State
@@ -291,6 +292,14 @@ local function CreateConfigWindow()
         FeidDB.disableInBGs = this:GetChecked() and true or false
     end)
 
+    local fullCheck = CreateFrame("CheckButton", "FeidFullCheck", f, "UICheckButtonTemplate")
+    fullCheck:SetPoint("TOPLEFT", bgCheck, "BOTTOMLEFT", 0, 5)
+    fullCheck:SetScale(0.8)
+    getglobal(fullCheck:GetName() .. "Text"):SetText("Only fade when HP/Mana full")
+    fullCheck:SetScript("OnClick", function()
+        FeidDB.fullHPManaOnly = this:GetChecked() and true or false
+    end)
+
     -- Vertical Separator 2 (between Settings and Frame List)
     local vline2 = f:CreateTexture(nil, "ARTWORK")
     vline2:SetTexture(0.5, 0.5, 0.5, 0.5)
@@ -302,7 +311,7 @@ local function CreateConfigWindow()
     local function CreateFrameConfigPopup()
         local p = CreateFrame("Frame", "FeidFrameConfigPopup", UIParent)
         p:SetWidth(250)
-        p:SetHeight(380)
+        p:SetHeight(420)
         p:SetPoint("CENTER", UIParent, "CENTER")
         p:SetBackdrop({
             bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
@@ -358,7 +367,12 @@ local function CreateConfigWindow()
         pInvertCheck:SetPoint("TOPLEFT", pOutSlider, "BOTTOMLEFT", -5, -15)
         getglobal(pInvertCheck:GetName() .. "Text"):SetText("Invert")
 
-        local sliders = {pMinSlider, pMaxSlider, pInSlider, pOutSlider, pInvertCheck}
+        -- Full HP/Mana Checkbox
+        local pFullCheck = CreateFrame("CheckButton", "FeidPopupFullCheck", p, "UICheckButtonTemplate")
+        pFullCheck:SetPoint("TOPLEFT", pInvertCheck, "BOTTOMLEFT", 0, 5)
+        getglobal(pFullCheck:GetName() .. "Text"):SetText("Only fade when HP/Mana full")
+
+        local sliders = {pMinSlider, pMaxSlider, pInSlider, pOutSlider, pInvertCheck, pFullCheck}
         local function UpdatePopupState()
             local enabled = not pDefaultCheck:GetChecked()
             for _, s in ipairs(sliders) do
@@ -402,7 +416,8 @@ local function CreateConfigWindow()
                 maxAlpha = pMaxSlider:GetValue(),
                 fadeInDuration = pInSlider:GetValue(),
                 fadeOutDuration = pOutSlider:GetValue(),
-                invert = pInvertCheck:GetChecked() and true or false
+                invert = pInvertCheck:GetChecked() and true or false,
+                fullHPManaOnly = pFullCheck:GetChecked() and true or false
             }
 
             if oldName ~= newName then
@@ -418,7 +433,7 @@ local function CreateConfigWindow()
         p.Open = function(self, name)
             local cfg = FeidDB.frames[name]
             if type(cfg) ~= "table" then
-                cfg = { useDefault = true, minAlpha = FeidDB.minAlpha, maxAlpha = FeidDB.maxAlpha, fadeInDuration = FeidDB.fadeInDuration, fadeOutDuration = FeidDB.fadeOutDuration, invert = false }
+                cfg = { useDefault = true, minAlpha = FeidDB.minAlpha, maxAlpha = FeidDB.maxAlpha, fadeInDuration = FeidDB.fadeInDuration, fadeOutDuration = FeidDB.fadeOutDuration, invert = false, fullHPManaOnly = false }
             end
             self.oldName = name
             pNameEdit:SetText(name)
@@ -428,6 +443,7 @@ local function CreateConfigWindow()
             pInSlider:SetValue(cfg.fadeInDuration or FeidDB.fadeInDuration)
             pOutSlider:SetValue(cfg.fadeOutDuration or FeidDB.fadeOutDuration)
             pInvertCheck:SetChecked(cfg.invert)
+            pFullCheck:SetChecked(cfg.fullHPManaOnly)
 
             -- Trigger the visual update for disabled states
             UpdatePopupState()
@@ -582,6 +598,7 @@ local function CreateConfigWindow()
         partyCheck:SetChecked(FeidDB.disableInParty)
         raidCheck:SetChecked(FeidDB.disableInRaids)
         bgCheck:SetChecked(FeidDB.disableInBGs)
+        fullCheck:SetChecked(FeidDB.fullHPManaOnly)
         Feid_UpdateScrollChild()
     end)
 
@@ -656,7 +673,7 @@ fader:SetScript("OnUpdate", function()
         return
     end
 
-    local combat, casting
+    local combat, casting, notFull
     throttleTimer = throttleTimer + elapsed
     local updateStates = false
     if throttleTimer >= STATE_THROTTLE then
@@ -664,26 +681,29 @@ fader:SetScript("OnUpdate", function()
         throttleTimer = 0
         combat = UnitAffectingCombat("player")
         casting = isCasting or isChanneling
+        notFull = (UnitHealth("player") < UnitHealthMax("player")) or (UnitMana("player") < UnitManaMax("player"))
     end
 
     for _, info in ipairs(resolvedFrames) do
         if updateStates then
             local cfg = info.config
-            local minAlpha, maxAlpha, invert
+            local minAlpha, maxAlpha, invert, fullHPManaOnly
             
             if cfg and not cfg.useDefault then
                 minAlpha = cfg.minAlpha or FeidDB.minAlpha
                 maxAlpha = cfg.maxAlpha or FeidDB.maxAlpha
                 invert = cfg.invert
+                fullHPManaOnly = cfg.fullHPManaOnly
             else
                 minAlpha = FeidDB.minAlpha
                 maxAlpha = FeidDB.maxAlpha
                 invert = false
+                fullHPManaOnly = FeidDB.fullHPManaOnly
             end
 
             -- Determine target alpha for this specific frame
             local mouseOver = IsMouseOverFrame(info.frame)
-            local isTriggered = combat or casting or mouseOver
+            local isTriggered = combat or casting or mouseOver or (fullHPManaOnly and notFull)
             if invert then
                 isTriggered = not isTriggered
             end
